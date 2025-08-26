@@ -339,8 +339,8 @@
             font-size: 12pt;
             line-height: 1.5;
             overflow-y: auto;
-            white-space: pre-wrap;
-            word-wrap: break-word;
+            max-width: 8.5in;
+            margin: 0 auto;
         }
 
         .timer-modal {
@@ -414,35 +414,56 @@
         .scene-heading {
             font-weight: bold;
             text-transform: uppercase;
-            margin: 1rem 0 0.5rem 0;
+            margin: 1.5rem 0 1rem 0;
+            page-break-after: avoid;
+            font-size: 12pt;
         }
 
         .character-name {
             font-weight: bold;
             text-transform: uppercase;
-            margin: 1rem 0 0.25rem 3.7rem;
-            text-align: left;
+            margin: 1.5rem 0 0.25rem 0;
+            text-align: center;
+            page-break-after: avoid;
+            font-size: 12pt;
         }
 
         .dialogue {
-            margin: 0 1rem 0.5rem 2.5rem;
-            max-width: 3.5in;
+            margin: 0.25rem auto 1rem auto;
+            max-width: 35em;
+            text-align: left;
+            padding: 0 1rem;
+            font-size: 12pt;
+            line-height: 1.5;
         }
 
         .parenthetical {
-            margin: 0 1.5rem 0.25rem 3.1rem;
-            font-style: normal;
+            margin: 0.25rem auto;
+            max-width: 30em;
+            text-align: center;
+            font-style: italic;
+            font-size: 12pt;
         }
 
         .transition {
             font-weight: bold;
             text-transform: uppercase;
             text-align: right;
-            margin: 1rem 0;
+            margin: 1.5rem 0 1.5rem 0;
+            page-break-before: avoid;
+            font-size: 12pt;
         }
 
         .action {
-            margin: 0.5rem 0;
+            margin: 1rem 0;
+            text-align: left;
+            font-size: 12pt;
+            line-height: 1.5;
+        }
+
+        .empty-line {
+            height: 1.5rem;
+            font-size: 12pt;
         }
 
         .title-page {
@@ -683,7 +704,6 @@ CUT TO:"
         function parseFountain(text) {
             const lines = text.split('\n');
             const parsed = [];
-            let inTitlePage = true;
             
             for (let i = 0; i < lines.length; i++) {
                 let line = lines[i];
@@ -696,47 +716,67 @@ CUT TO:"
                     continue;
                 }
                 
-                // Once we hit actual content, we're no longer in title page
-                if (inTitlePage && line.trim() !== '') {
-                    inTitlePage = false;
-                }
-                
-                // Scene headings
-                if (/^(INT\.|EXT\.|INT\/EXT\.|FADE IN:|FADE OUT:)/.test(line.toUpperCase())) {
+                // Scene headings - must start with specific keywords
+                if (/^(INT\.|EXT\.|INT\.\/EXT\.|FADE IN:|FADE OUT:)/i.test(line.trim())) {
                     type = 'scene-heading';
                     
                     // Extract location for autocomplete
-                    const locationMatch = line.match(/(INT\.|EXT\.|INT\/EXT\.)\s+([^-]+)/i);
+                    const locationMatch = line.match(/(INT\.|EXT\.|INT\.\/EXT\.)\s+([^-]+)/i);
                     if (locationMatch) {
                         locations.add(locationMatch[2].trim());
                     }
                 }
-                // Character names (all caps, centered-ish)
-                else if (/^[A-Z][A-Z\s]*(\(.*\))?$/.test(line.trim()) && 
-                         line.trim().length > 1 && 
-                         line.trim().length < 40 &&
-                         !line.includes('.') &&
-                         i < lines.length - 1 && 
-                         lines[i + 1].trim() !== '') {
-                    type = 'character';
-                    characters.add(line.trim().replace(/\(.*\)/, '').trim());
-                }
-                // Parentheticals
-                else if (/^\s*\(.*\)\s*$/.test(line)) {
-                    type = 'parenthetical';
-                }
-                // Transitions
-                else if (/^(CUT TO:|DISSOLVE TO:|FADE TO:|MATCH CUT:|JUMP CUT:|SMASH CUT:)/.test(line.toUpperCase()) ||
-                         line.trim().toUpperCase().endsWith(' TO:')) {
+                // Transitions - all caps ending with ':'
+                else if (/^[A-Z][A-Z\s]*:$/.test(line.trim()) || 
+                         /^(CUT TO:|DISSOLVE TO:|FADE TO:|MATCH CUT:|JUMP CUT:|SMASH CUT:)/i.test(line.trim())) {
                     type = 'transition';
                 }
-                // Dialogue (follows character name)
-                else if (i > 0 && parsed[i-1] && (parsed[i-1].type === 'character' || parsed[i-1].type === 'parenthetical')) {
-                    type = 'dialogue';
+                // Character names - all caps, no punctuation except parentheses, not too long
+                else if (/^[A-Z][A-Z\s]*(\([^)]*\))?$/.test(line.trim()) && 
+                         line.trim().length > 1 && 
+                         line.trim().length < 50 &&
+                         !line.includes('.') &&
+                         !line.includes(':') &&
+                         i < lines.length - 1 && 
+                         lines[i + 1].trim() !== '') {
+                    
+                    // Check if next non-empty line looks like dialogue (not all caps)
+                    let nextLineIndex = i + 1;
+                    while (nextLineIndex < lines.length && lines[nextLineIndex].trim() === '') {
+                        nextLineIndex++;
+                    }
+                    
+                    if (nextLineIndex < lines.length) {
+                        const nextLine = lines[nextLineIndex].trim();
+                        // If next line is not all caps or starts with '(', it's likely dialogue
+                        if (!(/^[A-Z][A-Z\s]*:?$/.test(nextLine)) || nextLine.startsWith('(')) {
+                            type = 'character';
+                            characters.add(line.trim().replace(/\([^)]*\)/, '').trim());
+                        }
+                    }
                 }
-                // Check if previous line was dialogue and this continues it
-                else if (i > 0 && parsed[i-1] && parsed[i-1].type === 'dialogue' && !line.match(/^[A-Z]/)) {
-                    type = 'dialogue';
+                // Parentheticals - wrapped in parentheses
+                else if (/^\s*\([^)]+\)\s*$/.test(line.trim())) {
+                    type = 'parenthetical';
+                }
+                // Dialogue - follows character name or parenthetical
+                else if (i > 0) {
+                    // Look backwards to find the most recent non-empty line
+                    let prevIndex = i - 1;
+                    while (prevIndex >= 0 && parsed[prevIndex] && parsed[prevIndex].type === 'empty') {
+                        prevIndex--;
+                    }
+                    
+                    if (prevIndex >= 0 && parsed[prevIndex] && 
+                        (parsed[prevIndex].type === 'character' || parsed[prevIndex].type === 'parenthetical')) {
+                        type = 'dialogue';
+                    }
+                    // Continue dialogue if previous line was dialogue and this line is not all caps
+                    else if (prevIndex >= 0 && parsed[prevIndex] && 
+                             parsed[prevIndex].type === 'dialogue' && 
+                             !(/^[A-Z][A-Z\s]*:?$/.test(line.trim()))) {
+                        type = 'dialogue';
+                    }
                 }
                 
                 parsed.push({ type, content: line });
@@ -754,20 +794,27 @@ CUT TO:"
                     case 'empty':
                         return '<div class="empty-line">&nbsp;</div>';
                     case 'scene-heading':
-                        return `<div class="scene-heading">${content}</div>`;
+                        return `<div class="scene-heading">${escapeHtml(content)}</div>`;
                     case 'character':
-                        return `<div class="character-name">${content}</div>`;
+                        return `<div class="character-name">${escapeHtml(content)}</div>`;
                     case 'dialogue':
-                        return `<div class="dialogue">${content}</div>`;
+                        return `<div class="dialogue">${escapeHtml(content)}</div>`;
                     case 'parenthetical':
-                        return `<div class="parenthetical">${content}</div>`;
+                        return `<div class="parenthetical">${escapeHtml(content)}</div>`;
                     case 'transition':
-                        return `<div class="transition">${content}</div>`;
+                        return `<div class="transition">${escapeHtml(content)}</div>`;
                     case 'action':
                     default:
-                        return `<div class="action">${content}</div>`;
+                        return `<div class="action">${escapeHtml(content)}</div>`;
                 }
             }).join('');
+        }
+
+        // Helper function to escape HTML
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
         }
 
         // Update preview
@@ -1276,50 +1323,35 @@ CUT TO:"
         // Auto-save every 30 seconds
         setInterval(saveScript, 30000);
 
+        // Update timer display when minutes change
+        document.getElementById('timerMinutes').addEventListener('input', function() {
+            if (!timerRunning) {
+                resetTimer();
+            }
+        });
+
+        // Add event listeners for title page updates
+        document.getElementById('scriptTitle').addEventListener('input', updatePreview);
+        document.getElementById('authorName').addEventListener('input', updatePreview);
+        document.getElementById('contactInfo').addEventListener('input', updatePreview);
+
+        // Add auto-save on input
+        document.getElementById('scriptEditor').addEventListener('input', function() {
+            updatePreview();
+            // Debounced save after 2 seconds of no typing
+            clearTimeout(window.autoSaveTimeout);
+            window.autoSaveTimeout = setTimeout(saveScript, 2000);
+        });
+
         // Initialize application
         document.addEventListener('DOMContentLoaded', function() {
-            // Small delay to ensure all elements are rendered
-            setTimeout(function() {
-                loadTheme();
-                loadPresets();
-                loadScript();
-                updatePreview();
-                
-                // Focus on editor
-                const editor = document.getElementById('scriptEditor');
-                if (editor) {
-                    editor.focus();
-                }
-                
-                // Add event listeners for title page updates
-                const titleField = document.getElementById('scriptTitle');
-                const authorField = document.getElementById('authorName');
-                const contactField = document.getElementById('contactInfo');
-                const editorField = document.getElementById('scriptEditor');
-                const timerMinutesField = document.getElementById('timerMinutes');
-                
-                if (titleField) titleField.addEventListener('input', updatePreview);
-                if (authorField) authorField.addEventListener('input', updatePreview);
-                if (contactField) contactField.addEventListener('input', updatePreview);
-                
-                if (editorField) {
-                    editorField.addEventListener('input', function() {
-                        updatePreview();
-                        // Debounced save after 2 seconds of no typing
-                        clearTimeout(window.autoSaveTimeout);
-                        window.autoSaveTimeout = setTimeout(saveScript, 2000);
-                    });
-                }
-                
-                // Update timer display when minutes change
-                if (timerMinutesField) {
-                    timerMinutesField.addEventListener('input', function() {
-                        if (!timerRunning) {
-                            resetTimer();
-                        }
-                    });
-                }
-            }, 100);
+            loadTheme();
+            loadPresets();
+            loadScript();
+            updatePreview();
+            
+            // Focus on editor
+            document.getElementById('scriptEditor').focus();
         });
 
         // Handle beforeunload to save work
@@ -1343,13 +1375,11 @@ CUT TO:"
                 
                 // Show brief save confirmation
                 const editor = document.querySelector('.editor-pane .pane-header');
-                if (editor) {
-                    const originalText = editor.textContent;
-                    editor.textContent = '💾 Saved!';
-                    setTimeout(() => {
-                        editor.textContent = originalText;
-                    }, 1000);
-                }
+                const originalText = editor.textContent;
+                editor.textContent = '💾 Saved!';
+                setTimeout(() => {
+                    editor.textContent = originalText;
+                }, 1000);
             }
             
             // Ctrl/Cmd + P to export PDF
