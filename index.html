@@ -433,15 +433,19 @@
             text-align: center;
             page-break-after: avoid;
             font-size: 12pt;
+            width: 100%;
         }
 
         .dialogue {
             margin: 0.25rem auto 1rem auto;
             max-width: 35em;
             text-align: left;
-            padding: 0 1rem;
+            padding: 0;
             font-size: 12pt;
             line-height: 1.5;
+            width: 35em;
+            margin-left: auto;
+            margin-right: auto;
         }
 
         .parenthetical {
@@ -450,6 +454,9 @@
             text-align: center;
             font-style: italic;
             font-size: 12pt;
+            width: 30em;
+            margin-left: auto;
+            margin-right: auto;
         }
 
         .transition {
@@ -542,8 +549,7 @@
             <div class="header-content">
                 <div class="logo">
                     <div class="logo-icon">🎬</div>
-                    <h1>Script Genie</h1><br>
-                    <h4>     by John Donham</h4>
+                    <h1>Script Genie</h1>
                 </div>
                 <div class="header-controls">
                     <button class="btn" onclick="exportToPDF()">📄 Export PDF</button>
