@@ -240,27 +240,12 @@ const ScriptGenie = {
                      /^(CUT TO:|DISSOLVE TO:|FADE TO:|MATCH CUT:|JUMP CUT:|SMASH CUT:)/i.test(line.trim())) {
                 type = 'transition';
             }
-            // Character names
-            else if (/^[A-Z][A-Z\s]*(\([^)]*\))?$/.test(line.trim()) && 
-                     line.trim().length > 1 && 
-                     line.trim().length < 50 &&
-                     !line.includes('.') &&
-                     !line.includes(':') &&
-                     i < lines.length - 1) {
-                
-                // Check if next non-empty line looks like dialogue
-                let nextLineIndex = i + 1;
-                while (nextLineIndex < lines.length && lines[nextLineIndex].trim() === '') {
-                    nextLineIndex++;
-                }
-                
-                if (nextLineIndex < lines.length) {
-                    const nextLine = lines[nextLineIndex].trim();
-                    if (!(/^[A-Z][A-Z\s]*:?$/.test(nextLine)) || nextLine.startsWith('(')) {
-                        type = 'character';
-                        this.characters.add(line.trim().replace(/\([^)]*\)/, '').trim());
-                    }
-                }
+            // Character names - more flexible detection
+            else if (this.isCharacterName(line, lines, i)) {
+                type = 'character';
+                // Add to characters set (convert to uppercase for consistency)
+                const cleanName = line.trim().replace(/\([^)]*\)/, '').trim().toUpperCase();
+                this.characters.add(cleanName);
             }
             // Parentheticals
             else if (/^\s*\([^)]+\)\s*$/.test(line.trim())) {
@@ -279,6 +264,7 @@ const ScriptGenie = {
                 }
                 else if (prevIndex >= 0 && parsed[prevIndex] && 
                          parsed[prevIndex].type === 'dialogue' && 
+                         !this.isCharacterName(line, lines, i) &&
                          !(/^[A-Z][A-Z\s]*:?$/.test(line.trim()))) {
                     type = 'dialogue';
                 }
@@ -288,6 +274,67 @@ const ScriptGenie = {
         }
         
         return parsed;
+    },
+
+    // Helper function to detect character names more intelligently
+    isCharacterName(line, lines, index) {
+        const trimmed = line.trim();
+        
+        // Must not be empty
+        if (!trimmed) return false;
+        
+        // Must not be too long (character names shouldn't be full sentences)
+        if (trimmed.length > 50) return false;
+        
+        // Must not contain periods (except in extensions like "V.O." or "O.S.")
+        if (trimmed.includes('.') && !trimmed.match(/\b(V\.O\.|O\.S\.|CONT\.D)\b/i)) return false;
+        
+        // Must not end with colon unless it's a known transition
+        if (trimmed.endsWith(':') && !(/^(CUT TO:|DISSOLVE TO:|FADE TO:|MATCH CUT:|JUMP CUT:|SMASH CUT:)$/i.test(trimmed))) return false;
+        
+        // Check if next non-empty line exists and could be dialogue
+        let nextLineIndex = index + 1;
+        while (nextLineIndex < lines.length && lines[nextLineIndex].trim() === '') {
+            nextLineIndex++;
+        }
+        
+        if (nextLineIndex >= lines.length) return false;
+        
+        const nextLine = lines[nextLineIndex].trim();
+        
+        // Next line should not be another potential character name (all caps) unless it starts with parentheses
+        if (nextLine.startsWith('(')) return true;
+        
+        // If next line is all caps and looks like another character name, this probably isn't a character
+        if (/^[A-Z][A-Z\s]*(\([^)]*\))?$/.test(nextLine) && nextLine.length < 50) {
+            return false;
+        }
+        
+        // Character names can be:
+        // 1. All uppercase: "JOHN", "MARY SMITH" 
+        // 2. Title case: "John", "Mary Smith"
+        // 3. Mixed case but starting with capital: "McDonnell", "O'Brien"
+        // 4. Can have extensions: "JOHN (V.O.)", "Mary (O.S.)"
+        
+        // Remove any parenthetical extensions for testing
+        const nameOnly = trimmed.replace(/\s*\([^)]*\)$/, '');
+        
+        // Check if it looks like a name (starts with capital, contains only letters, spaces, apostrophes, periods for initials)
+        if (/^[A-Z][a-zA-Z\s'.-]*$/.test(nameOnly)) {
+            // Additional checks:
+            // - Not too many words (names shouldn't be full sentences)
+            const wordCount = nameOnly.split(/\s+/).length;
+            if (wordCount <= 4) { // Allow up to 4 words for names like "Mary Jane Watson Smith"
+                return true;
+            }
+        }
+        
+        // Fallback: if it's all caps and reasonable length, probably a character
+        if (/^[A-Z][A-Z\s]*(\([^)]*\))?$/.test(trimmed) && trimmed.length <= 30) {
+            return true;
+        }
+        
+        return false;
     },
 
     // Format parsed script for preview
