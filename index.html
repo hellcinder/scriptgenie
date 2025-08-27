@@ -18,9 +18,9 @@
                     </div>
                 </div>
                 <div class="header-controls">
-                    <button class="btn" onclick="exportToPDF()">📄 Export PDF</button>
-                    <button class="btn btn-primary" onclick="showTimer()">⏱️ Writing Sprint</button>
-                    <button class="theme-toggle" onclick="toggleTheme()" id="themeToggle">🌙</button>
+                    <button class="btn" id="exportBtn">📄 Export PDF</button>
+                    <button class="btn btn-primary" id="timerBtn">⏱️ Writing Sprint</button>
+                    <button class="theme-toggle" id="themeToggle">🌙</button>
                 </div>
             </div>
         </header>
@@ -48,10 +48,10 @@
                 <div class="sidebar-section">
                     <h3>Quick Insert</h3>
                     <div class="quick-actions">
-                        <button class="action-btn" onclick="insertElement('character')">Character</button>
-                        <button class="action-btn" onclick="insertElement('scene')">Scene</button>
-                        <button class="action-btn" onclick="insertElement('transition')">Transition</button>
-                        <button class="action-btn" onclick="insertElement('parenthetical')">Parenthetical</button>
+                        <button class="action-btn" data-element="character">Character</button>
+                        <button class="action-btn" data-element="scene">Scene</button>
+                        <button class="action-btn" data-element="transition">Transition</button>
+                        <button class="action-btn" data-element="parenthetical">Parenthetical</button>
                     </div>
                 </div>
 
@@ -59,20 +59,20 @@
                     <h3>Presets</h3>
                     <div class="input-group">
                         <input type="text" id="newPreset" class="input-field" placeholder="Add location/character">
-                        <button class="btn" onclick="addPreset()">Add Preset</button>
+                        <button class="btn" id="addPresetBtn">Add Preset</button>
                     </div>
                     <div class="presets-list" id="presetsList">
-                        <div class="preset-item" onclick="insertPreset('INT. HOUSE - DAY')">
+                        <div class="preset-item" data-preset="INT. HOUSE - DAY">
                             INT. HOUSE - DAY
-                            <span class="preset-delete" onclick="event.stopPropagation(); deletePreset('INT. HOUSE - DAY')">×</span>
+                            <span class="preset-delete" data-delete="INT. HOUSE - DAY">×</span>
                         </div>
-                        <div class="preset-item" onclick="insertPreset('EXT. STREET - NIGHT')">
+                        <div class="preset-item" data-preset="EXT. STREET - NIGHT">
                             EXT. STREET - NIGHT
-                            <span class="preset-delete" onclick="event.stopPropagation(); deletePreset('EXT. STREET - NIGHT')">×</span>
+                            <span class="preset-delete" data-delete="EXT. STREET - NIGHT">×</span>
                         </div>
-                        <div class="preset-item" onclick="insertPreset('JOHN')">
+                        <div class="preset-item" data-preset="JOHN">
                             JOHN
-                            <span class="preset-delete" onclick="event.stopPropagation(); deletePreset('JOHN')">×</span>
+                            <span class="preset-delete" data-delete="JOHN">×</span>
                         </div>
                     </div>
                 </div>
@@ -103,9 +103,9 @@ MARY (O.S.)
 Just a minute!
 
 CUT TO:"
-                        oninput="updatePreview()"
-                        onkeydown="handleKeyDown(event)"
-                        onkeyup="handleAutoComplete(event)"
+                        oninput="ScriptGenie.updatePreview()"
+                        onkeydown="ScriptGenie.handleKeyDown(event)"
+                        onkeyup="ScriptGenie.handleAutoComplete(event)"
                     ></textarea>
                     <div class="autocomplete-popup" id="autocompletePopup"></div>
                 </div>
@@ -139,10 +139,10 @@ CUT TO:"
             </div>
             <div class="timer-display" id="timerDisplay">25:00</div>
             <div class="timer-controls">
-                <button class="btn btn-primary" id="startTimer" onclick="startTimer()">Start</button>
-                <button class="btn" id="pauseTimer" onclick="pauseTimer()" style="display: none;">Pause</button>
-                <button class="btn" onclick="resetTimer()">Reset</button>
-                <button class="btn" onclick="closeTimer()">Close</button>
+                <button class="btn btn-primary" id="startTimerBtn">Start</button>
+                <button class="btn" id="pauseTimerBtn" style="display: none;">Pause</button>
+                <button class="btn" id="resetTimerBtn">Reset</button>
+                <button class="btn" id="closeTimerBtn">Close</button>
             </div>
         </div>
     </div>
