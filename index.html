@@ -332,15 +332,22 @@
 
         .preview-content {
             flex: 1;
-            padding: 2rem;
+            padding: 1rem;
             background: white;
             color: #000;
             font-family: 'Courier Prime', 'Courier New', monospace;
             font-size: 12pt;
             line-height: 1.5;
             overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .script-content {
+            width: 100%;
             max-width: 8.5in;
-            margin: 0 auto;
+            padding: 1rem;
         }
 
         .timer-modal {
@@ -469,9 +476,9 @@
         .title-page {
             text-align: center;
             margin-top: 3.5in;
-            margin-left: 4in;
-            margin-right: 1in;
             margin-bottom: 1in;
+            position: relative;
+            width: 100%;
         }
 
         .title-page .title {
@@ -483,9 +490,10 @@
 
         .title-page .author-info {
             position: absolute;
-            bottom: 1in;
-            right: 1in;
+            bottom: -2in;
+            right: 0;
             text-align: left;
+            font-size: 12pt;
         }
 
         @media (max-width: 1024px) {
@@ -855,14 +863,16 @@ CUT TO:"
                 
                 // Add title page + script content
                 const titlePageHtml = `
-                    <div class="title-page">
-                        <div class="title">${title.value || 'YOUR SCRIPT TITLE'}</div>
-                        <div class="author-info">
-                            ${authorInfo}
+                    <div class="script-content">
+                        <div class="title-page">
+                            <div class="title">${title.value || 'YOUR SCRIPT TITLE'}</div>
+                            <div class="author-info">
+                                ${authorInfo}
+                            </div>
                         </div>
-                    </div>
-                    <div style="page-break-before: always; padding-top: 1in;">
-                        ${formatted}
+                        <div style="page-break-before: always; padding-top: 1in;">
+                            ${formatted}
+                        </div>
                     </div>
                 `;
                 
@@ -871,10 +881,12 @@ CUT TO:"
                 }
             } else {
                 const defaultHtml = `
-                    <div class="title-page">
-                        <div class="title">${title.value || 'YOUR SCRIPT TITLE'}</div>
-                        <div class="author-info">
-                            ${authorInfo}
+                    <div class="script-content">
+                        <div class="title-page">
+                            <div class="title">${title.value || 'YOUR SCRIPT TITLE'}</div>
+                            <div class="author-info">
+                                ${authorInfo}
+                            </div>
                         </div>
                     </div>
                 `;
@@ -973,25 +985,32 @@ CUT TO:"
             const editor = document.getElementById('scriptEditor');
             const cursorPos = editor.selectionStart;
             let insertText = '';
+            let cursorOffset = 0; // How many characters back from the end to place cursor
             
             switch (type) {
                 case 'character':
                     insertText = '\n\nCHARACTER NAME\nDialogue goes here.\n';
+                    cursorOffset = insertText.length - 'CHARACTER NAME\nDialogue goes here.\n'.length;
                     break;
                 case 'scene':
                     insertText = '\n\nINT. LOCATION - DAY\n\nAction description here.\n';
+                    cursorOffset = insertText.length - 'INT. LOCATION - DAY\n\nAction description here.\n'.length;
                     break;
                 case 'transition':
                     insertText = '\n\nCUT TO:\n';
+                    cursorOffset = insertText.length - 'CUT TO:\n'.length;
                     break;
                 case 'parenthetical':
                     insertText = '\n(beat)\n';
+                    cursorOffset = insertText.length - '(beat)\n'.length;
                     break;
             }
             
             const newText = editor.value.substring(0, cursorPos) + insertText + editor.value.substring(cursorPos);
             editor.value = newText;
-            editor.selectionStart = editor.selectionEnd = cursorPos + insertText.length;
+            
+            // Position cursor at the start of the placeholder text
+            editor.selectionStart = editor.selectionEnd = cursorPos + cursorOffset;
             editor.focus();
             updatePreview();
         }
