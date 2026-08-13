@@ -463,8 +463,11 @@ const ScriptGenie = {
         const template = this.TEMPLATES[type];
         if (!editor || !template) return;
 
-        const cursorPos = editor.selectionStart;
-        const before = editor.value.substring(0, cursorPos);
+        // Insert after the caret's line rather than at the caret itself, so clicking a
+        // quick-insert button mid-word can't split the line in two.
+        const lineBreak = editor.value.indexOf('\n', editor.selectionEnd);
+        const insertAt = lineBreak === -1 ? editor.value.length : lineBreak;
+        const before = editor.value.substring(0, insertAt);
 
         // Add only the separator that's actually missing, instead of always two
         // newlines, which used to leave a growing gap of blank lines.
@@ -478,15 +481,15 @@ const ScriptGenie = {
         }
 
         const insertText = prefix + template.body;
-        editor.value = before + insertText + editor.value.substring(cursorPos);
+        editor.value = before + insertText + editor.value.substring(insertAt);
 
         // Select the placeholder so typing replaces it straight away.
         const placeholderOffset = template.select ? insertText.indexOf(template.select) : -1;
         if (placeholderOffset !== -1) {
-            editor.selectionStart = cursorPos + placeholderOffset;
-            editor.selectionEnd = cursorPos + placeholderOffset + template.select.length;
+            editor.selectionStart = insertAt + placeholderOffset;
+            editor.selectionEnd = insertAt + placeholderOffset + template.select.length;
         } else {
-            editor.selectionStart = editor.selectionEnd = cursorPos + insertText.length;
+            editor.selectionStart = editor.selectionEnd = insertAt + insertText.length;
         }
 
         editor.focus();
