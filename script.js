@@ -11,6 +11,12 @@ const ScriptGenie = {
     timerSeconds: 0,
     timerRunning: false,
 
+    // Autocomplete state
+    autoCompleteOpen: false,
+    autoCompleteIndex: -1,
+    autoCompleteLineStart: 0,
+    autoCompleteItems: [],
+
     // Initialize the application
     init() {
         console.log('ScriptGenie initializing...');
@@ -144,7 +150,13 @@ const ScriptGenie = {
             
             scriptEditor.addEventListener('keydown', (e) => this.handleKeyDown(e));
             scriptEditor.addEventListener('keyup', (e) => this.handleAutoComplete(e));
+            // The popup is positioned against the caret, so any scroll invalidates it.
+            scriptEditor.addEventListener('scroll', () => this.hideAutoComplete());
+            scriptEditor.addEventListener('blur', () => this.hideAutoComplete());
         }
+
+        window.addEventListener('resize', () => this.hideAutoComplete());
+        window.addEventListener('scroll', () => this.hideAutoComplete(), true);
 
         if (timerMinutes) {
             timerMinutes.addEventListener('input', () => {
@@ -194,7 +206,7 @@ const ScriptGenie = {
         if (themeToggle) {
             themeToggle.textContent = this.currentTheme === 'light' ? '🌙' : '☀️';
         }
-        localStorage.setItem('scriptGenie_theme', this.currentTheme);
+        this.writeStorage('scriptGenie_theme', this.currentTheme);
         console.log('Theme toggled to:', this.currentTheme);
     },
 
@@ -214,127 +226,133 @@ const ScriptGenie = {
     parseFountain(text) {
         const lines = text.split('\n');
         const parsed = [];
-        
+
+        // Rebuild the autocomplete vocabulary from scratch on every parse, otherwise
+        // half-typed names ("JO", "JOH") accumulate forever and pollute suggestions.
+        this.characters = new Set();
+        this.locations = new Set();
+
         for (let i = 0; i < lines.length; i++) {
-            let line = lines[i];
+            const line = lines[i];
+            const trimmed = line.trim();
             let type = 'action';
-            
+
             // Skip empty lines but track them
-            if (line.trim() === '') {
+            if (trimmed === '') {
                 parsed.push({ type: 'empty', content: '' });
                 continue;
             }
-            
-            // Scene headings
-            if (/^(INT\.|EXT\.|INT\.\/EXT\.|FADE IN:|FADE OUT:)/i.test(line.trim())) {
+
+            // In Fountain a blank line always closes a dialogue block, so only the
+            // element immediately above this one can continue it.
+            const previous = parsed[parsed.length - 1];
+            const previousType = previous ? previous.type : 'empty';
+            const inDialogueBlock = previousType === 'character' ||
+                                    previousType === 'parenthetical' ||
+                                    previousType === 'dialogue';
+
+            if (this.isSceneHeading(trimmed)) {
                 type = 'scene-heading';
-                
+
                 // Extract location for autocomplete
-                const locationMatch = line.match(/(INT\.|EXT\.|INT\.\/EXT\.)\s+([^-]+)/i);
+                const locationMatch = trimmed.match(/^(?:INT\.\/EXT\.|I\/E\.|INT\.|EXT\.|EST\.)\s+([^-]+)/i);
                 if (locationMatch) {
-                    this.locations.add(locationMatch[2].trim());
+                    this.locations.add(locationMatch[1].trim().toUpperCase());
                 }
             }
-            // Transitions
-            else if (/^[A-Z][A-Z\s]*:$/.test(line.trim()) || 
-                     /^(CUT TO:|DISSOLVE TO:|FADE TO:|MATCH CUT:|JUMP CUT:|SMASH CUT:)/i.test(line.trim())) {
+            else if (this.isTransition(trimmed)) {
                 type = 'transition';
             }
-            // Character names - more flexible detection
-            else if (this.isCharacterName(line, lines, i)) {
-                type = 'character';
-                // Add to characters set (convert to uppercase for consistency)
-                const cleanName = line.trim().replace(/\([^)]*\)/, '').trim().toUpperCase();
-                this.characters.add(cleanName);
-            }
-            // Parentheticals
-            else if (/^\s*\([^)]+\)\s*$/.test(line.trim())) {
+            else if (this.isParenthetical(trimmed)) {
                 type = 'parenthetical';
             }
-            // Dialogue
-            else if (i > 0) {
-                let prevIndex = i - 1;
-                while (prevIndex >= 0 && parsed[prevIndex] && parsed[prevIndex].type === 'empty') {
-                    prevIndex--;
-                }
-                
-                if (prevIndex >= 0 && parsed[prevIndex] && 
-                    (parsed[prevIndex].type === 'character' || parsed[prevIndex].type === 'parenthetical')) {
-                    type = 'dialogue';
-                }
-                else if (prevIndex >= 0 && parsed[prevIndex] && 
-                         parsed[prevIndex].type === 'dialogue' && 
-                         !this.isCharacterName(line, lines, i) &&
-                         !(/^[A-Z][A-Z\s]*:?$/.test(line.trim()))) {
-                    type = 'dialogue';
-                }
+            else if (this.isCharacterName(line, lines, i)) {
+                type = 'character';
+                this.characters.add(this.characterName(trimmed));
             }
-            
+            else if (inDialogueBlock) {
+                type = 'dialogue';
+            }
+
             parsed.push({ type, content: line });
         }
-        
+
         return parsed;
     },
 
-    // Helper function to detect character names more intelligently
-    isCharacterName(line, lines, index) {
-        const trimmed = line.trim();
-        
-        // Must not be empty
-        if (!trimmed) return false;
-        
-        // Must not be too long (character names shouldn't be full sentences)
-        if (trimmed.length > 50) return false;
-        
-        // Must not contain periods (except in extensions like "V.O." or "O.S.")
-        if (trimmed.includes('.') && !trimmed.match(/\b(V\.O\.|O\.S\.|CONT\.D)\b/i)) return false;
-        
-        // Must not end with colon unless it's a known transition
-        if (trimmed.endsWith(':') && !(/^(CUT TO:|DISSOLVE TO:|FADE TO:|MATCH CUT:|JUMP CUT:|SMASH CUT:)$/i.test(trimmed))) return false;
-        
-        // Check if next non-empty line exists and could be dialogue
-        let nextLineIndex = index + 1;
-        while (nextLineIndex < lines.length && lines[nextLineIndex].trim() === '') {
-            nextLineIndex++;
-        }
-        
-        if (nextLineIndex >= lines.length) return false;
-        
-        const nextLine = lines[nextLineIndex].trim();
-        
-        // Next line should not be another potential character name (all caps) unless it starts with parentheses
-        if (nextLine.startsWith('(')) return true;
-        
-        // If next line is all caps and looks like another character name, this probably isn't a character
-        if (/^[A-Z][A-Z\s]*(\([^)]*\))?$/.test(nextLine) && nextLine.length < 50) {
-            return false;
-        }
-        
-        // Character names can be:
-        // 1. All uppercase: "JOHN", "MARY SMITH" 
-        // 2. Title case: "John", "Mary Smith"
-        // 3. Mixed case but starting with capital: "McDonnell", "O'Brien"
-        // 4. Can have extensions: "JOHN (V.O.)", "Mary (O.S.)"
-        
-        // Remove any parenthetical extensions for testing
-        const nameOnly = trimmed.replace(/\s*\([^)]*\)$/, '');
-        
-        // Check if it looks like a name (starts with capital, contains only letters, spaces, apostrophes, periods for initials)
-        if (/^[A-Z][a-zA-Z\s'.-]*$/.test(nameOnly)) {
-            // Additional checks:
-            // - Not too many words (names shouldn't be full sentences)
-            const wordCount = nameOnly.split(/\s+/).length;
-            if (wordCount <= 4) { // Allow up to 4 words for names like "Mary Jane Watson Smith"
-                return true;
-            }
-        }
-        
-        // Fallback: if it's all caps and reasonable length, probably a character
-        if (/^[A-Z][A-Z\s]*(\([^)]*\))?$/.test(trimmed) && trimmed.length <= 30) {
+    // "FADE IN:" and "FADE OUT:" are kept here (rather than with transitions) so they
+    // render flush left, the way they appear on the page.
+    isSceneHeading(trimmed) {
+        return /^(?:INT\.\/EXT\.|I\/E\.|INT\.|EXT\.|EST\.|FADE IN:|FADE OUT:)/i.test(trimmed);
+    },
+
+    isTransition(trimmed) {
+        if (/^(?:CUT TO:|DISSOLVE TO:|FADE TO:|SMASH CUT TO:|MATCH CUT TO:|JUMP CUT TO:|MATCH CUT:|JUMP CUT:|SMASH CUT:|CUT TO BLACK:|FADE TO BLACK:)$/i.test(trimmed)) {
             return true;
         }
-        
-        return false;
+        // Generic uppercase transitions, e.g. "SLOWLY DISSOLVE TO:"
+        return /^[A-Z][A-Z0-9\s'&-]*\bTO:$/.test(trimmed);
+    },
+
+    isParenthetical(trimmed) {
+        return /^\([^)]*\)$/.test(trimmed);
+    },
+
+    // Strip a trailing cue extension: "JOHN (V.O.)" -> "JOHN"
+    characterName(trimmed) {
+        return trimmed
+            .replace(/^@/, '')
+            .replace(/\s*\([^)]*\)\s*$/, '')
+            .trim()
+            .toUpperCase();
+    },
+
+    // Detect a Fountain character cue.
+    isCharacterName(line, lines, index) {
+        let trimmed = line.trim();
+
+        // Must not be empty
+        if (!trimmed) return false;
+
+        // A cue must be preceded by a blank line, and followed by dialogue or a
+        // parenthetical. Without these, ordinary action lines get mistaken for cues.
+        if (index > 0 && lines[index - 1].trim() !== '') return false;
+        if (index + 1 >= lines.length || lines[index + 1].trim() === '') return false;
+
+        // "@" forces a cue, which is how Fountain writes names that aren't uppercase
+        // ("@McAvoy"). A forced cue skips the heuristics below.
+        const forced = trimmed.startsWith('@');
+        if (forced) trimmed = trimmed.slice(1).trim();
+
+        // Must not be too long (character names shouldn't be full sentences)
+        if (!trimmed || trimmed.length > 50) return false;
+
+        // Extensions like (V.O.), (O.S.) and (CONT'D) belong to the cue, not the name,
+        // so every test below runs against the name with the extension removed.
+        const nameOnly = trimmed.replace(/\s*\([^)]*\)\s*$/, '').trim();
+        if (!nameOnly) return false;
+
+        if (forced) return true;
+
+        // Sentence punctuation never appears in a cue.
+        if (/[!?,;:]/.test(nameOnly)) return false;
+
+        // Periods are acceptable only inside abbreviations ("MRS. SMITH", "J.R."),
+        // never as the full stop that ends a line of action.
+        const periodsAreAbbreviations = nameOnly.split(/\s+/).every(
+            token => !token.includes('.') || /^(?:[A-Z]{1,4}\.)+$/i.test(token)
+        );
+        if (!periodsAreAbbreviations) return false;
+
+        // Fountain requires cues to be uppercase; use "@" for anything else.
+        if (nameOnly !== nameOnly.toUpperCase()) return false;
+
+        // Must read like a name, not a sentence.
+        if (!/[A-Z]/.test(nameOnly)) return false;
+        if (!/^[A-Z0-9\s'’.#&-]+$/.test(nameOnly)) return false;
+        if (nameOnly.split(/\s+/).length > 4) return false;
+
+        return true;
     },
 
     // Format parsed script for preview
@@ -362,11 +380,15 @@ const ScriptGenie = {
         }).join('');
     },
 
-    // Helper function to escape HTML
+    // Helper function to escape HTML. Quotes are escaped too, so the result is safe
+    // inside an attribute value as well as in text.
     escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+        return String(text == null ? '' : text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     },
 
     // Update preview
@@ -388,108 +410,134 @@ const ScriptGenie = {
             previewTitle.textContent = title.value || 'YOUR SCRIPT TITLE';
         }
         
+        // Everything below goes through innerHTML, so escape before interpolating.
         let authorInfo = 'Written by<br>';
-        authorInfo += (author.value || 'Your Name') + '<br>';
+        authorInfo += this.escapeHtml(author.value || 'Your Name') + '<br>';
         if (contact.value) {
-            authorInfo += contact.value.replace(/\n/g, '<br>');
+            authorInfo += this.escapeHtml(contact.value).replace(/\n/g, '<br>');
         }
-        
+
         if (previewAuthor) {
             previewAuthor.innerHTML = authorInfo;
         }
-        
-        if (editor.value && editor.value.trim()) {
-            const parsed = this.parseFountain(editor.value);
-            const formatted = this.formatScript(parsed);
-            
-            const titlePageHtml = `
-                <div class="script-content">
+
+        const safeTitle = this.escapeHtml(title.value || 'YOUR SCRIPT TITLE');
+        const titlePage = `
                     <div class="title-page">
-                        <div class="title">${title.value || 'YOUR SCRIPT TITLE'}</div>
+                        <div class="title">${safeTitle}</div>
                         <div class="author-info">
                             ${authorInfo}
                         </div>
-                    </div>
+                    </div>`;
+
+        if (editor.value && editor.value.trim()) {
+            const parsed = this.parseFountain(editor.value);
+            const formatted = this.formatScript(parsed);
+
+            preview.innerHTML = `
+                <div class="script-content">${titlePage}
                     <div style="page-break-before: always; padding-top: 1in;">
                         ${formatted}
                     </div>
                 </div>
             `;
-            
-            preview.innerHTML = titlePageHtml;
         } else {
-            const defaultHtml = `
-                <div class="script-content">
-                    <div class="title-page">
-                        <div class="title">${title.value || 'YOUR SCRIPT TITLE'}</div>
-                        <div class="author-info">
-                            ${authorInfo}
-                        </div>
-                    </div>
+            preview.innerHTML = `
+                <div class="script-content">${titlePage}
                 </div>
             `;
-            
-            preview.innerHTML = defaultHtml;
         }
     },
 
     // Quick insert functions
+    TEMPLATES: {
+        character: { body: 'CHARACTER NAME\nDialogue goes here.\n', select: 'CHARACTER NAME', blankLineBefore: true },
+        scene: { body: 'INT. LOCATION - DAY\n\nAction description here.\n', select: 'LOCATION', blankLineBefore: true },
+        transition: { body: 'CUT TO:\n', select: 'CUT TO:', blankLineBefore: true },
+        parenthetical: { body: '(beat)\n', select: 'beat', blankLineBefore: false }
+    },
+
     insertElement(type) {
         console.log('Inserting element:', type);
         const editor = document.getElementById('scriptEditor');
-        if (!editor) return;
-        
+        const template = this.TEMPLATES[type];
+        if (!editor || !template) return;
+
         const cursorPos = editor.selectionStart;
-        let insertText = '';
-        let cursorOffset = 0;
-        
-        switch (type) {
-            case 'character':
-                insertText = '\n\nCHARACTER NAME\nDialogue goes here.\n';
-                cursorOffset = 2;
-                break;
-            case 'scene':
-                insertText = '\n\nINT. LOCATION - DAY\n\nAction description here.\n';
-                cursorOffset = 2;
-                break;
-            case 'transition':
-                insertText = '\n\nCUT TO:\n';
-                cursorOffset = 2;
-                break;
-            case 'parenthetical':
-                insertText = '\n(beat)\n';
-                cursorOffset = 1;
-                break;
+        const before = editor.value.substring(0, cursorPos);
+
+        // Add only the separator that's actually missing, instead of always two
+        // newlines, which used to leave a growing gap of blank lines.
+        let prefix = '';
+        if (before !== '') {
+            if (template.blankLineBefore) {
+                if (!/\n[ \t]*\n$/.test(before)) prefix = /\n$/.test(before) ? '\n' : '\n\n';
+            } else if (!/\n$/.test(before)) {
+                prefix = '\n';
+            }
         }
-        
-        const newText = editor.value.substring(0, cursorPos) + insertText + editor.value.substring(cursorPos);
-        editor.value = newText;
-        editor.selectionStart = editor.selectionEnd = cursorPos + cursorOffset;
+
+        const insertText = prefix + template.body;
+        editor.value = before + insertText + editor.value.substring(cursorPos);
+
+        // Select the placeholder so typing replaces it straight away.
+        const placeholderOffset = template.select ? insertText.indexOf(template.select) : -1;
+        if (placeholderOffset !== -1) {
+            editor.selectionStart = cursorPos + placeholderOffset;
+            editor.selectionEnd = cursorPos + placeholderOffset + template.select.length;
+        } else {
+            editor.selectionStart = editor.selectionEnd = cursorPos + insertText.length;
+        }
+
         editor.focus();
         this.updatePreview();
+        this.saveScript();
     },
+
+    // Keys that drive the popup rather than the text, so they must not re-filter it.
+    AUTOCOMPLETE_NAV_KEYS: ['ArrowUp', 'ArrowDown', 'Enter', 'Tab', 'Escape'],
 
     // Auto-completion
     handleAutoComplete(event) {
+        if (this.AUTOCOMPLETE_NAV_KEYS.includes(event.key)) return;
+
         const editor = document.getElementById('scriptEditor');
         if (!editor) return;
-        
+
+        if (event.ctrlKey || event.altKey || event.metaKey) {
+            this.hideAutoComplete();
+            return;
+        }
+
         const cursorPos = editor.selectionStart;
         const text = editor.value;
         const lineStart = text.lastIndexOf('\n', cursorPos - 1) + 1;
         const lineEnd = text.indexOf('\n', cursorPos);
         const currentLine = text.substring(lineStart, lineEnd === -1 ? text.length : lineEnd);
-        
-        if (currentLine.length > 0 && !event.ctrlKey && !event.altKey && !event.metaKey) {
-            const suggestions = [...this.characters, ...this.locations, ...this.presets].filter(item =>
-                item.toLowerCase().includes(currentLine.toLowerCase())
-            );
-            
-            if (suggestions.length > 0 && currentLine.trim() !== '') {
-                this.showAutoComplete(suggestions, editor, lineStart);
-            } else {
-                this.hideAutoComplete();
-            }
+        const fragment = currentLine.trim();
+
+        // Two characters is enough context to be useful without firing on every letter.
+        if (fragment.length < 2) {
+            this.hideAutoComplete();
+            return;
+        }
+
+        const needle = fragment.toLowerCase();
+        const seen = new Set();
+        const suggestions = [...this.characters, ...this.locations, ...this.presets]
+            .filter(item => {
+                if (typeof item !== 'string' || !item) return false;
+                const key = item.toUpperCase();
+                if (seen.has(key)) return false;
+                seen.add(key);
+                const lower = item.toLowerCase();
+                // Prefix match only, and never suggest what's already typed.
+                return lower.startsWith(needle) && lower !== needle;
+            })
+            .slice(0, 8);
+
+        if (suggestions.length > 0) {
+            this.showAutoComplete(suggestions, editor, lineStart);
         } else {
             this.hideAutoComplete();
         }
@@ -498,62 +546,190 @@ const ScriptGenie = {
     showAutoComplete(suggestions, editor, lineStart) {
         const popup = document.getElementById('autocompletePopup');
         if (!popup) return;
-        
-        popup.innerHTML = suggestions.map(suggestion => 
-            `<div class="autocomplete-item" data-suggestion="${suggestion}" data-line-start="${lineStart}">${suggestion}</div>`
-        ).join('');
-        
-        popup.querySelectorAll('.autocomplete-item').forEach(item => {
-            item.addEventListener('click', (e) => {
-                const suggestion = e.target.getAttribute('data-suggestion');
-                const lineStart = parseInt(e.target.getAttribute('data-line-start'));
+
+        popup.textContent = '';
+
+        suggestions.forEach((suggestion, index) => {
+            const item = document.createElement('div');
+            item.className = 'autocomplete-item';
+            item.textContent = suggestion;
+            item.dataset.suggestion = suggestion;
+            // mousedown (not click) so the editor never loses focus mid-selection.
+            item.addEventListener('mousedown', (e) => {
+                e.preventDefault();
                 this.insertSuggestion(suggestion, lineStart);
             });
+            item.addEventListener('mouseenter', () => this.setActiveSuggestion(index));
+            popup.appendChild(item);
         });
-        
-        const rect = editor.getBoundingClientRect();
-        popup.style.left = rect.left + 'px';
-        popup.style.top = (rect.top + 100) + 'px';
+
+        this.autoCompleteItems = suggestions;
+        this.autoCompleteLineStart = lineStart;
+        this.autoCompleteOpen = true;
+
+        popup.style.visibility = 'hidden';
         popup.style.display = 'block';
+        this.setActiveSuggestion(0);
+        this.positionAutoComplete(popup, editor);
+        popup.style.visibility = 'visible';
+    },
+
+    // Place the popup under the caret instead of at a fixed offset from the editor.
+    positionAutoComplete(popup, editor) {
+        const caret = this.getCaretCoordinates(editor);
+        const popupRect = popup.getBoundingClientRect();
+        const margin = 8;
+
+        let left = caret.left;
+        let top = caret.top;
+
+        if (left + popupRect.width > window.innerWidth - margin) {
+            left = Math.max(margin, window.innerWidth - popupRect.width - margin);
+        }
+        // Flip above the caret when there isn't room below.
+        if (top + popupRect.height > window.innerHeight - margin) {
+            const above = caret.top - caret.lineHeight - popupRect.height;
+            top = above >= margin ? above : Math.max(margin, window.innerHeight - popupRect.height - margin);
+        }
+
+        popup.style.left = Math.round(left) + 'px';
+        popup.style.top = Math.round(top) + 'px';
+    },
+
+    // The editor is monospace, so the caret can be derived from row/column without
+    // building a mirror element.
+    getCaretCoordinates(editor) {
+        const style = window.getComputedStyle(editor);
+        const fontSize = parseFloat(style.fontSize) || 16;
+        const lineHeight = parseFloat(style.lineHeight) || fontSize * 1.5;
+        const paddingLeft = parseFloat(style.paddingLeft) || 0;
+        const paddingTop = parseFloat(style.paddingTop) || 0;
+        const font = style.font || `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+        const charWidth = this.measureCharWidth(font) || fontSize * 0.6;
+
+        const upToCaret = editor.value.substring(0, editor.selectionStart).split('\n');
+        const row = upToCaret.length - 1;
+        const column = upToCaret[row].length;
+
+        const rect = editor.getBoundingClientRect();
+        return {
+            left: rect.left + paddingLeft + (column * charWidth) - editor.scrollLeft,
+            top: rect.top + paddingTop + ((row + 1) * lineHeight) - editor.scrollTop,
+            lineHeight
+        };
+    },
+
+    measureCharWidth(font) {
+        if (this._charWidthFont === font && this._charWidth) return this._charWidth;
+        try {
+            this._measureCanvas = this._measureCanvas || document.createElement('canvas');
+            const ctx = this._measureCanvas.getContext('2d');
+            ctx.font = font;
+            const width = ctx.measureText('M').width;
+            if (width > 0) {
+                this._charWidthFont = font;
+                this._charWidth = width;
+                return width;
+            }
+        } catch (e) {
+            console.warn('Could not measure character width:', e);
+        }
+        return 0;
+    },
+
+    setActiveSuggestion(index) {
+        const popup = document.getElementById('autocompletePopup');
+        if (!popup) return;
+        const items = popup.querySelectorAll('.autocomplete-item');
+        if (!items.length) return;
+
+        this.autoCompleteIndex = (index + items.length) % items.length;
+        items.forEach((item, i) => item.classList.toggle('selected', i === this.autoCompleteIndex));
+        const active = items[this.autoCompleteIndex];
+        if (active && active.scrollIntoView) {
+            active.scrollIntoView({ block: 'nearest' });
+        }
+    },
+
+    moveActiveSuggestion(delta) {
+        this.setActiveSuggestion(this.autoCompleteIndex + delta);
+    },
+
+    acceptActiveSuggestion() {
+        const suggestion = this.autoCompleteItems[this.autoCompleteIndex];
+        if (suggestion === undefined) return false;
+        this.insertSuggestion(suggestion, this.autoCompleteLineStart);
+        return true;
     },
 
     hideAutoComplete() {
         const popup = document.getElementById('autocompletePopup');
-        if (popup) popup.style.display = 'none';
+        if (popup) {
+            popup.style.display = 'none';
+            popup.textContent = '';
+        }
+        this.autoCompleteOpen = false;
+        this.autoCompleteIndex = -1;
+        this.autoCompleteItems = [];
     },
 
     insertSuggestion(suggestion, lineStart) {
         const editor = document.getElementById('scriptEditor');
         if (!editor) return;
-        
+
         const text = editor.value;
         const cursorPos = editor.selectionStart;
         const lineEnd = text.indexOf('\n', cursorPos);
-        
+
         const newText = text.substring(0, lineStart) + suggestion + text.substring(lineEnd === -1 ? text.length : lineEnd);
         editor.value = newText;
         editor.selectionStart = editor.selectionEnd = lineStart + suggestion.length;
-        
+
         this.hideAutoComplete();
         this.updatePreview();
+        this.saveScript();
         editor.focus();
     },
 
     // Key handling
     handleKeyDown(event) {
+        // While the popup is open it owns the navigation keys.
+        if (this.autoCompleteOpen && this.autoCompleteItems.length) {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                this.moveActiveSuggestion(1);
+                return;
+            }
+            if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                this.moveActiveSuggestion(-1);
+                return;
+            }
+            if (event.key === 'Enter' || event.key === 'Tab') {
+                event.preventDefault();
+                this.acceptActiveSuggestion();
+                return;
+            }
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                this.hideAutoComplete();
+                return;
+            }
+        }
+
         if (event.key === 'Escape') {
             this.hideAutoComplete();
             return;
         }
-        
+
         if (event.key === 'Tab') {
             event.preventDefault();
             const editor = document.getElementById('scriptEditor');
             if (!editor) return;
-            
+
             const start = editor.selectionStart;
             const end = editor.selectionEnd;
-            
+
             editor.value = editor.value.substring(0, start) + '    ' + editor.value.substring(end);
             editor.selectionStart = editor.selectionEnd = start + 4;
             this.updatePreview();
@@ -570,14 +746,15 @@ const ScriptGenie = {
             this.presets.push(preset);
             this.updatePresetsList();
             input.value = '';
-            localStorage.setItem('scriptGenie_presets', JSON.stringify(this.presets));
+            this.savePresets();
         }
+        input.focus();
     },
 
     deletePreset(preset) {
         this.presets = this.presets.filter(p => p !== preset);
         this.updatePresetsList();
-        localStorage.setItem('scriptGenie_presets', JSON.stringify(this.presets));
+        this.savePresets();
     },
 
     insertPreset(preset) {
@@ -592,23 +769,48 @@ const ScriptGenie = {
         this.updatePreview();
     },
 
+    // Built with DOM calls rather than an HTML string: preset names are user input and
+    // a name containing a quote used to break out of the data-preset attribute.
     updatePresetsList() {
         const list = document.getElementById('presetsList');
         if (!list) return;
-        
-        list.innerHTML = this.presets.map(preset => `
-            <div class="preset-item" data-preset="${preset}">
-                ${preset}
-                <span class="preset-delete" data-delete="${preset}">×</span>
-            </div>
-        `).join('');
+
+        list.textContent = '';
+
+        this.presets.forEach(preset => {
+            const item = document.createElement('div');
+            item.className = 'preset-item';
+            item.dataset.preset = preset;
+            item.title = 'Insert ' + preset;
+
+            const label = document.createElement('span');
+            label.className = 'preset-label';
+            label.textContent = preset;
+
+            const remove = document.createElement('span');
+            remove.className = 'preset-delete';
+            remove.dataset.delete = preset;
+            remove.textContent = '×';
+            remove.title = 'Delete ' + preset;
+
+            item.appendChild(label);
+            item.appendChild(remove);
+            list.appendChild(item);
+        });
+    },
+
+    savePresets() {
+        this.writeStorage('scriptGenie_presets', JSON.stringify(this.presets));
     },
 
     loadPresets() {
         const saved = localStorage.getItem('scriptGenie_presets');
         if (saved) {
             try {
-                this.presets = JSON.parse(saved);
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) {
+                    this.presets = parsed.filter(p => typeof p === 'string' && p.trim() !== '');
+                }
             } catch (e) {
                 console.error('Error loading presets:', e);
             }
@@ -766,16 +968,21 @@ const ScriptGenie = {
     // Export to PDF
     exportToPDF() {
         const printWindow = window.open('', '_blank');
-        if (!printWindow) return;
-        
+        if (!printWindow) {
+            this.showStatus('⚠️ Allow pop-ups to export');
+            console.warn('Export blocked: the browser prevented the print window from opening.');
+            return;
+        }
+
         const title = document.getElementById('scriptTitle')?.value || 'Untitled Script';
         const content = document.getElementById('scriptPreview')?.innerHTML || '';
-        
+
         const printContent = `
             <!DOCTYPE html>
             <html>
             <head>
-                <title>${title}</title>
+                <meta charset="UTF-8">
+                <title>${this.escapeHtml(title)}</title>
                 <style>
                     body {
                         font-family: 'Courier New', 'Liberation Mono', 'Nimbus Mono L', Monaco, 'Lucida Console', monospace;
@@ -858,13 +1065,23 @@ const ScriptGenie = {
         
         printWindow.document.write(printContent);
         printWindow.document.close();
-        
-        printWindow.onload = function() {
-            printWindow.focus();
-            setTimeout(() => {
+
+        // A document built with document.write may already be complete by now, in which
+        // case onload never fires and the print dialog would never open.
+        const triggerPrint = () => {
+            try {
+                printWindow.focus();
                 printWindow.print();
-            }, 500);
+            } catch (e) {
+                console.warn('Could not open the print dialog:', e);
+            }
         };
+
+        if (printWindow.document.readyState === 'complete') {
+            setTimeout(triggerPrint, 300);
+        } else {
+            printWindow.onload = () => setTimeout(triggerPrint, 300);
+        }
     },
 
     // Save/Load functionality
@@ -883,7 +1100,19 @@ const ScriptGenie = {
                 timestamp: new Date().toISOString()
             };
             
-            localStorage.setItem('scriptGenie_autosave', JSON.stringify(scriptData));
+            this.writeStorage('scriptGenie_autosave', JSON.stringify(scriptData));
+        }
+    },
+
+    // localStorage throws when it is full or disabled (Safari private browsing), and an
+    // unhandled throw here would break autosave and the beforeunload handler.
+    writeStorage(key, value) {
+        try {
+            localStorage.setItem(key, value);
+            return true;
+        } catch (e) {
+            console.warn('Could not write to local storage:', e);
+            return false;
         }
     },
 
@@ -911,14 +1140,25 @@ const ScriptGenie = {
 
     // Show save confirmation
     showSaveConfirmation() {
+        this.showStatus('💾 Saved!');
+    },
+
+    // Briefly replace the editor pane header with a status message.
+    showStatus(message, duration = 1000) {
         const header = document.querySelector('.editor-pane .pane-header');
-        if (header) {
-            const originalText = header.textContent;
-            header.textContent = '💾 Saved!';
-            setTimeout(() => {
-                header.textContent = originalText;
-            }, 1000);
+        if (!header) return;
+
+        if (this._statusTimeout) {
+            clearTimeout(this._statusTimeout);
+        } else {
+            this._statusOriginalText = header.textContent;
         }
+
+        header.textContent = message;
+        this._statusTimeout = setTimeout(() => {
+            header.textContent = this._statusOriginalText;
+            this._statusTimeout = null;
+        }, duration);
     }
 };
 
